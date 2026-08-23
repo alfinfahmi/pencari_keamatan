@@ -28,8 +28,8 @@ import os
 # HARUS SAMA PERSIS dengan AES_KEY_HEX di lib/services/decryption_service.dart
 AES_KEY_HEX = "e00952e4e57895ffe40aad412019328e55a65381581646caca0ad82156b5f608"
 
-   SRC = "data_source/data_koordinat.json"
-   OUT = "assets/data/data_koordinat.enc"
+SRC = "data_source/data_koordinat.json"
+OUT = "assets/data/data_koordinat.enc"
 
 def main():
     key = bytes.fromhex(AES_KEY_HEX)
