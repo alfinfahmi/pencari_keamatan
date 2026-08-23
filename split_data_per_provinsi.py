@@ -17,8 +17,8 @@ import json
 import re
 import os
 
-   SRC = "data_source/data_koordinat.json"
-   OUT_DIR = "assets/data/web"
+SRC = "data_source/data_koordinat.json"
+OUT_DIR = "assets/data/web"
 
 def slugify(text: str) -> str:
     text = text.lower().strip()
