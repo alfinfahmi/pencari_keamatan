@@ -31,9 +31,6 @@ dependencies:
   # Kompas kiblat live — heading dari sensor magnetometer perangkat
   flutter_compass: ^0.8.0
 
-  # Pemilihan & impor file JSON custom points
-  file_picker: ^6.2.0
-
   # Format angka/tanggal Indonesia
   intl: ^0.19.0
 
