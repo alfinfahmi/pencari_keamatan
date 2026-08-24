@@ -71,7 +71,7 @@ jobs:
               }
               plugins.withId("com.android.library") {
                   extensions.configure(com.android.build.gradle.BaseExtension::class.java) {
-                      compileSdkVersion(36)
+                      compileSdkVersion(35)
                   }
               }
           }
@@ -82,12 +82,12 @@ jobs:
           subprojects {
               plugins.withId('com.android.application') {
                   android {
-                      compileSdkVersion 36
+                      compileSdkVersion 35
                   }
               }
               plugins.withId('com.android.library') {
                   android {
-                      compileSdkVersion 36
+                      compileSdkVersion 35
                   }
               }
           }
