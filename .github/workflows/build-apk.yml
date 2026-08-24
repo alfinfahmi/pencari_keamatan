@@ -112,16 +112,18 @@ jobs:
                   line_start = text.rfind("\n// ---", 0, idx)
                   if line_start != -1:
                       text = text[:line_start].rstrip() + "\n"
-              text = text.rstrip() + "\n" + block
+              
+              # PERUBAHAN UTAMA DI SINI: Disisipkan di ATAS file agar tidak terlambat dievaluasi
+              text = block + "\n\n" + text
               p.write_text(text)
-              print(f"{path}: override compileSdk (plugins.withId) berhasil ditambahkan.")
+              print(f"{path}: override compileSdk (plugins.withId) berhasil ditambahkan di bagian atas.")
               print("--- Isi file lengkap setelah patch: ---")
               print(text)
 
           if not found:
               print("PERINGATAN: tidak ditemukan android/build.gradle(.kts) di root!")
           PYEOF
-
+          
       - name: Ambil dependency
         run: flutter pub get
 
