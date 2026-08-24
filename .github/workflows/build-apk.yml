@@ -37,4 +37,84 @@ jobs:
 
       - name: Generate folder platform Android (jika belum ada)
         # Project ini dikirim tanpa folder android/ karena folder tersebut
-        # hanya bisa digenerate oleh Fl
+        # hanya bisa digenerate oleh Flutter SDK asli. CI ini membuatnya
+        # otomatis SEKALI jika belum ada -- setelah itu, commit folder
+        # android/ ke repo Anda supaya package name (applicationId) tidak
+        # berubah acak setiap build (lihat catatan --org di panduan).
+        run: |
+          if [ ! -d "android" ]; then
+            flutter create --platforms=android --org com.lflirboyo .
+          fi
+
+      - name: Naikkan compileSdk (plugin modern butuh minimal 34)
+        # `flutter create` men-generate compileSdk lama (33) yang tidak lagi
+        # cukup untuk dependency androidx terbaru yang dipakai plugin seperti
+        # share_plus. Pakai Python (regex fleksibel) alih-alih sed literal,
+        # supaya tetap kena sasaran meski format persis baris compileSdk
+        # berbeda-beda antar versi Flutter (Groovy build.gradle ATAU Kotlin
+        # DSL build.gradle.kts, dengan/tanpa tanda '=', dsb).
+        run: |
+          python3 << 'PYEOF'
+          import re, pathlib
+
+          candidates = ["android/app/build.gradle.kts", "android/app/build.gradle"]
+          found = False
+          for path in candidates:
+              p = pathlib.Path(path)
+              if not p.exists():
+                  continue
+              found = True
+              is_kts = path.endswith(".kts")
+              text = p.read_text()
+
+              print(f"--- SEBELUM ({path}) ---")
+              for line in text.splitlines():
+                  if "compileSdk" in line or "targetSdk" in line:
+                      print(line)
+
+              def repl_compile(m):
+                  key = m.group(1) or "compileSdk"
+                  return f"{key} = 36" if is_kts else f"{key} 36"
+
+              def repl_target(m):
+                  key = m.group(1) or "targetSdk"
+                  return f"{key} = 34" if is_kts else f"{key} 34"
+
+              text2 = re.sub(
+                  r'(compileSdk(?:Version)?)\s*=?\s*flutter\.compileSdkVersion',
+                  repl_compile, text,
+              )
+              text2 = re.sub(
+                  r'(targetSdk(?:Version)?)\s*=?\s*flutter\.targetSdkVersion',
+                  repl_target, text2,
+              )
+
+              p.write_text(text2)
+
+              print(f"--- SESUDAH ({path}) ---")
+              for line in text2.splitlines():
+                  if "compileSdk" in line or "targetSdk" in line:
+                      print(line)
+
+          if not found:
+              print("PERINGATAN: tidak ditemukan android/app/build.gradle(.kts) sama sekali!")
+          PYEOF
+
+      - name: Ambil dependency
+        run: flutter pub get
+
+      - name: Generate Hive TypeAdapter (build_runner)
+        run: flutter pub run build_runner build --delete-conflicting-outputs
+
+      - name: Enkripsi data_koordinat.json -> .enc
+        run: python3 encrypt_data.py
+
+      - name: Build APK (release)
+        run: flutter build apk --release --obfuscate --split-debug-info=build/symbols
+
+      - name: Upload APK sebagai artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pencari-kecamatan-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
