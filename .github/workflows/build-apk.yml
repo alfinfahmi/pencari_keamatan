@@ -1,119 +1,86 @@
-name: Build APK
-
-# Jalankan otomatis setiap push ke branch main, ATAU dipicu manual lewat
-# tab "Actions" di GitHub (tombol "Run workflow").
-on:
-  push:
-    branches: [main]
-  workflow_dispatch: {}
-
-jobs:
-  build-apk:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout kode
-        uses: actions/checkout@v4
-
-      - name: Setup Java (dibutuhkan Android Gradle build)
-        uses: actions/setup-java@v4
-        with:
-          distribution: "temurin"
-          java-version: "17"
-
-      - name: Setup Flutter SDK
-        uses: subosito/flutter-action@v2
-        with:
-          channel: "stable"
-          cache: true
-
-      - name: Setup Python (untuk skrip enkripsi data)
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install pycryptodome
-        run: pip install pycryptodome
-
-      - name: Generate folder platform Android (jika belum ada)
-        # Project ini dikirim tanpa folder android/ karena folder tersebut
-        # hanya bisa digenerate oleh Flutter SDK asli. CI ini membuatnya
-        # otomatis SEKALI jika belum ada -- setelah itu, commit folder
-        # android/ ke repo Anda supaya package name (applicationId) tidak
-        # berubah acak setiap build (lihat catatan --org di panduan).
-        run: |
-          if [ ! -d "android" ]; then
-            flutter create --platforms=android --org com.lflirboyo .
-          fi
-
       - name: Paksa compileSdk seragam di SEMUA modul (app + plugin pihak ketiga)
-        # Percobaan sebelumnya (subprojects { afterEvaluate {...} }) TERBUKTI
-        # TIDAK CUKUP: error "Cannot run Project.afterEvaluate(Action) when
-        # the project is already evaluated" -- di sistem build Flutter
-        # terbaru, sebagian modul plugin SUDAH selesai dievaluasi Gradle
-        # sebelum blok afterEvaluate kita sempat berjalan.
-        #
-        # Solusi yang benar: pakai 'plugins.withId(...)', yang bereaksi
-        # begitu plugin Android diterapkan ke modul manapun -- tidak peduli
-        # urutan evaluasi, tidak akan pernah "terlambat" seperti afterEvaluate.
-        # Ini pendekatan standar & idiomatik Gradle untuk kasus seperti ini.
         run: |
           python3 << 'PYEOF'
           import pathlib
           import re
 
-          # Cari file app/build.gradle atau app/build.gradle.kts
-          target_files = [
+          # 1. Update compileSdk di android/app/build.gradle.kts (atau build.gradle)
+          app_files = [
               pathlib.Path("android/app/build.gradle.kts"),
               pathlib.Path("android/app/build.gradle")
           ]
-
-          updated = False
-          for p in target_files:
+          
+          for p in app_files:
               if not p.exists():
                   continue
-              
               content = p.read_text()
+              content, c1 = re.subn(r'compileSdk\s*=\s*\d+', 'compileSdk = 35', content)
+              if c1 == 0:
+                  content, c2 = re.subn(r'compileSdkVersion\s+\d+', 'compileSdkVersion 35', content)
+              else:
+                  c2 = 0
               
-              # Timpa atau ubah compileSdk / compileSdkVersion menjadi 35
-              # Mendukung format Gradle Groovy maupun Kotlin DSL (.kts)
-              new_content, count1 = re.subn(r'compileSdk\s*=\s*\d+', 'compileSdk = 35', content)
-              if count1 == 0:
-                  new_content, count2 = re.subn(r'compileSdkVersion\s+\d+', 'compileSdkVersion 35', new_content)
-              else:
-                  count2 = 0
+              if c1 > 0 or c2 > 0:
+                  p.write_text(content)
+                  print(f"Berhasil update compileSdk di aplikasi: {p}")
+              elif "android {" in content:
+                  content = content.replace("android {", "android {\n    compileSdk = 35")
+                  p.write_text(content)
+                  print(f"Berhasil menyisipkan compileSdk = 35 ke: {p}")
 
-              if count1 > 0 or count2 > 0:
-                  p.write_text(new_content)
-                  print(f"Berhasil memperbarui compileSdk ke 35 di: {p}")
-                  updated = True
-              else:
-                  # Jika tidak ketemu polanya, tambahkan manual di dalam blok android {}
-                  if "android {" in new_content:
-                      new_content = new_content.replace("android {", "android {\n    compileSdk = 35")
-                      p.write_text(new_content)
-                      print(f"Berhasil menyisipkan compileSdk = 35 ke dalam blok android di: {p}")
-                      updated = True
+          # 2. Paksa subprojects / plugin pihak ketiga menggunakan plugins.withId di root build.gradle(.kts)
+          KTS_BLOCK = '''
+          // --- Ditambahkan otomatis oleh CI: paksa compileSdk seragam ke semua modul ---
+          subprojects {
+              plugins.withId("com.android.application") {
+                  extensions.configure(com.android.build.gradle.BaseExtension::class.java) {
+                      compileSdkVersion(35)
+                  }
+              }
+              plugins.withId("com.android.library") {
+                  extensions.configure(com.android.build.gradle.BaseExtension::class.java) {
+                      compileSdkVersion(35)
+                  }
+              }
+          }
+          '''
 
-          if not updated:
-              print("PERINGATAN: File build.gradle target di android/app/ tidak ditemukan atau gagal diubah!")
+          GROOVY_BLOCK = '''
+          // --- Ditambahkan otomatis oleh CI: paksa compileSdk seragam ke semua modul ---
+          subprojects {
+              plugins.withId('com.android.application') {
+                  android {
+                      compileSdkVersion 35
+                  }
+              }
+              plugins.withId('com.android.library') {
+                  android {
+                      compileSdkVersion 35
+                  }
+              }
+          }
+          '''
+
+          root_candidates = [
+              ("android/build.gradle.kts", KTS_BLOCK),
+              ("android/build.gradle", GROOVY_BLOCK),
+          ]
+
+          MARKER = "Ditambahkan otomatis oleh CI"
+          for path, block in root_candidates:
+              p = pathlib.Path(path)
+              if not p.exists():
+                  continue
+              text = p.read_text()
+              if MARKER in text:
+                  idx = text.find(MARKER)
+                  line_start = text.rfind("\n// ---", 0, idx)
+                  if line_start != -1:
+                      text = text[:line_start].rstrip() + "\n"
+              
+              # Sisipkan di bagian atas file root build.gradle agar dievaluasi lebih awal
+              text = block + "\n\n" + text
+              p.write_text(text)
+              print(f"Berhasil menambahkan subprojects override ke: {path}")
+
           PYEOF
-
-      - name: Ambil dependency
-        run: flutter pub get
-
-      - name: Generate Hive TypeAdapter (build_runner)
-        run: flutter pub run build_runner build --delete-conflicting-outputs
-
-      - name: Enkripsi data_koordinat.json -> .enc
-        run: python3 encrypt_data.py
-
-      - name: Build APK (release)
-        run: flutter build apk --release --obfuscate --split-debug-info=build/symbols
-
-      - name: Upload APK sebagai artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: pencari-kecamatan-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
-          retention-days: 30
