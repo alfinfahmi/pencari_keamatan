@@ -60,70 +60,45 @@ jobs:
         run: |
           python3 << 'PYEOF'
           import pathlib
+          import re
 
-          KTS_BLOCK = '''
-          // --- Ditambahkan otomatis oleh CI: paksa compileSdk seragam ke semua modul ---
-          subprojects {
-              plugins.withId("com.android.application") {
-                  extensions.configure(com.android.build.gradle.BaseExtension::class.java) {
-                      compileSdkVersion(35)
-                  }
-              }
-              plugins.withId("com.android.library") {
-                  extensions.configure(com.android.build.gradle.BaseExtension::class.java) {
-                      compileSdkVersion(35)
-                  }
-              }
-          }
-          '''
-
-          GROOVY_BLOCK = '''
-          // --- Ditambahkan otomatis oleh CI: paksa compileSdk seragam ke semua modul ---
-          subprojects {
-              plugins.withId('com.android.application') {
-                  android {
-                      compileSdkVersion 35
-                  }
-              }
-              plugins.withId('com.android.library') {
-                  android {
-                      compileSdkVersion 35
-                  }
-              }
-          }
-          '''
-
-          MARKER = "Ditambahkan otomatis oleh CI"
-          candidates = [
-              ("android/build.gradle.kts", KTS_BLOCK),
-              ("android/build.gradle", GROOVY_BLOCK),
+          # Cari file app/build.gradle atau app/build.gradle.kts
+          target_files = [
+              pathlib.Path("android/app/build.gradle.kts"),
+              pathlib.Path("android/app/build.gradle")
           ]
 
-          found = False
-          for path, block in candidates:
-              p = pathlib.Path(path)
+          updated = False
+          for p in target_files:
               if not p.exists():
                   continue
-              found = True
-              text = p.read_text()
-              if MARKER in text:
-                  print(f"{path}: override lama ditemukan, menghapus dan mengganti dengan versi baru.")
-                  idx = text.find(MARKER)
-                  line_start = text.rfind("\n// ---", 0, idx)
-                  if line_start != -1:
-                      text = text[:line_start].rstrip() + "\n"
               
-              # PERUBAHAN UTAMA DI SINI: Disisipkan di ATAS file agar tidak terlambat dievaluasi
-              text = block + "\n\n" + text
-              p.write_text(text)
-              print(f"{path}: override compileSdk (plugins.withId) berhasil ditambahkan di bagian atas.")
-              print("--- Isi file lengkap setelah patch: ---")
-              print(text)
+              content = p.read_text()
+              
+              # Timpa atau ubah compileSdk / compileSdkVersion menjadi 35
+              # Mendukung format Gradle Groovy maupun Kotlin DSL (.kts)
+              new_content, count1 = re.subn(r'compileSdk\s*=\s*\d+', 'compileSdk = 35', content)
+              if count1 == 0:
+                  new_content, count2 = re.subn(r'compileSdkVersion\s+\d+', 'compileSdkVersion 35', new_content)
+              else:
+                  count2 = 0
 
-          if not found:
-              print("PERINGATAN: tidak ditemukan android/build.gradle(.kts) di root!")
+              if count1 > 0 or count2 > 0:
+                  p.write_text(new_content)
+                  print(f"Berhasil memperbarui compileSdk ke 35 di: {p}")
+                  updated = True
+              else:
+                  # Jika tidak ketemu polanya, tambahkan manual di dalam blok android {}
+                  if "android {" in new_content:
+                      new_content = new_content.replace("android {", "android {\n    compileSdk = 35")
+                      p.write_text(new_content)
+                      print(f"Berhasil menyisipkan compileSdk = 35 ke dalam blok android di: {p}")
+                      updated = True
+
+          if not updated:
+              print("PERINGATAN: File build.gradle target di android/app/ tidak ditemukan atau gagal diubah!")
           PYEOF
-          
+
       - name: Ambil dependency
         run: flutter pub get
 
