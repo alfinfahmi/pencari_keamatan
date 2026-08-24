@@ -47,19 +47,16 @@ jobs:
           fi
 
       - name: Paksa compileSdk seragam di SEMUA modul (app + plugin pihak ketiga)
-        # Percobaan sebelumnya (hanya menaikkan compileSdk di android/app/)
-        # TERBUKTI TIDAK CUKUP: error build menunjukkan modul plugin pihak
-        # ketiga seperti :share_plus (kode dari pub.dev, bukan bagian repo
-        # ini) tetap resolve compileSdk=33 karena masing-masing merujuk ke
-        # 'flutter.compileSdkVersion' miliknya sendiri, terlepas dari
-        # perubahan di modul app kita.
+        # Percobaan sebelumnya (subprojects { afterEvaluate {...} }) TERBUKTI
+        # TIDAK CUKUP: error "Cannot run Project.afterEvaluate(Action) when
+        # the project is already evaluated" -- di sistem build Flutter
+        # terbaru, sebagian modul plugin SUDAH selesai dievaluasi Gradle
+        # sebelum blok afterEvaluate kita sempat berjalan.
         #
-        # Solusi yang benar: override di level ROOT project
-        # (android/build.gradle atau .kts, BUKAN android/app/...) memakai
-        # blok 'subprojects { afterEvaluate { ... } }', yang berlaku untuk
-        # SEMUA modul termasuk plugin pihak ketiga -- sudah diuji end-to-end
-        # terhadap simulasi kedua format file (Kotlin DSL & Groovy) sebelum
-        # dikirim ke workflow ini.
+        # Solusi yang benar: pakai 'plugins.withId(...)', yang bereaksi
+        # begitu plugin Android diterapkan ke modul manapun -- tidak peduli
+        # urutan evaluasi, tidak akan pernah "terlambat" seperti afterEvaluate.
+        # Ini pendekatan standar & idiomatik Gradle untuk kasus seperti ini.
         run: |
           python3 << 'PYEOF'
           import pathlib
@@ -67,8 +64,13 @@ jobs:
           KTS_BLOCK = '''
           // --- Ditambahkan otomatis oleh CI: paksa compileSdk seragam ke semua modul ---
           subprojects {
-              afterEvaluate {
-                  extensions.findByType(com.android.build.gradle.BaseExtension::class.java)?.apply {
+              plugins.withId("com.android.application") {
+                  extensions.configure(com.android.build.gradle.BaseExtension::class.java) {
+                      compileSdkVersion(36)
+                  }
+              }
+              plugins.withId("com.android.library") {
+                  extensions.configure(com.android.build.gradle.BaseExtension::class.java) {
                       compileSdkVersion(36)
                   }
               }
@@ -78,11 +80,14 @@ jobs:
           GROOVY_BLOCK = '''
           // --- Ditambahkan otomatis oleh CI: paksa compileSdk seragam ke semua modul ---
           subprojects {
-              afterEvaluate { project ->
-                  if (project.hasProperty('android')) {
-                      project.android {
-                          compileSdkVersion 36
-                      }
+              plugins.withId('com.android.application') {
+                  android {
+                      compileSdkVersion 36
+                  }
+              }
+              plugins.withId('com.android.library') {
+                  android {
+                      compileSdkVersion 36
                   }
               }
           }
@@ -102,11 +107,14 @@ jobs:
               found = True
               text = p.read_text()
               if MARKER in text:
-                  print(f"{path}: override sudah ada, dilewati.")
-                  continue
+                  print(f"{path}: override lama ditemukan, menghapus dan mengganti dengan versi baru.")
+                  idx = text.find(MARKER)
+                  line_start = text.rfind("\n// ---", 0, idx)
+                  if line_start != -1:
+                      text = text[:line_start].rstrip() + "\n"
               text = text.rstrip() + "\n" + block
               p.write_text(text)
-              print(f"{path}: override compileSdk (root, subprojects) berhasil ditambahkan.")
+              print(f"{path}: override compileSdk (plugins.withId) berhasil ditambahkan.")
               print("--- Isi file lengkap setelah patch: ---")
               print(text)
 
