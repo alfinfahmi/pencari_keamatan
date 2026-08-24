@@ -23,7 +23,7 @@ dependencies:
   encrypt: ^5.0.3
 
   # Salin ke clipboard & share file export/import
-  share_plus: ^7.2.2
+  share_plus: ^10.1.2
 
   # Lokasi GPS perangkat (opsional, untuk menambah titik kustom cepat)
   geolocator: ^11.0.0
