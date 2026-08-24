@@ -46,58 +46,72 @@ jobs:
             flutter create --platforms=android --org com.lflirboyo .
           fi
 
-      - name: Naikkan compileSdk (plugin modern butuh minimal 34)
-        # `flutter create` men-generate compileSdk lama (33) yang tidak lagi
-        # cukup untuk dependency androidx terbaru yang dipakai plugin seperti
-        # share_plus. Pakai Python (regex fleksibel) alih-alih sed literal,
-        # supaya tetap kena sasaran meski format persis baris compileSdk
-        # berbeda-beda antar versi Flutter (Groovy build.gradle ATAU Kotlin
-        # DSL build.gradle.kts, dengan/tanpa tanda '=', dsb).
+      - name: Paksa compileSdk seragam di SEMUA modul (app + plugin pihak ketiga)
+        # Percobaan sebelumnya (hanya menaikkan compileSdk di android/app/)
+        # TERBUKTI TIDAK CUKUP: error build menunjukkan modul plugin pihak
+        # ketiga seperti :share_plus (kode dari pub.dev, bukan bagian repo
+        # ini) tetap resolve compileSdk=33 karena masing-masing merujuk ke
+        # 'flutter.compileSdkVersion' miliknya sendiri, terlepas dari
+        # perubahan di modul app kita.
+        #
+        # Solusi yang benar: override di level ROOT project
+        # (android/build.gradle atau .kts, BUKAN android/app/...) memakai
+        # blok 'subprojects { afterEvaluate { ... } }', yang berlaku untuk
+        # SEMUA modul termasuk plugin pihak ketiga -- sudah diuji end-to-end
+        # terhadap simulasi kedua format file (Kotlin DSL & Groovy) sebelum
+        # dikirim ke workflow ini.
         run: |
           python3 << 'PYEOF'
-          import re, pathlib
+          import pathlib
 
-          candidates = ["android/app/build.gradle.kts", "android/app/build.gradle"]
+          KTS_BLOCK = '''
+          // --- Ditambahkan otomatis oleh CI: paksa compileSdk seragam ke semua modul ---
+          subprojects {
+              afterEvaluate {
+                  extensions.findByType(com.android.build.gradle.BaseExtension::class.java)?.apply {
+                      compileSdkVersion(36)
+                  }
+              }
+          }
+          '''
+
+          GROOVY_BLOCK = '''
+          // --- Ditambahkan otomatis oleh CI: paksa compileSdk seragam ke semua modul ---
+          subprojects {
+              afterEvaluate { project ->
+                  if (project.hasProperty('android')) {
+                      project.android {
+                          compileSdkVersion 36
+                      }
+                  }
+              }
+          }
+          '''
+
+          MARKER = "Ditambahkan otomatis oleh CI"
+          candidates = [
+              ("android/build.gradle.kts", KTS_BLOCK),
+              ("android/build.gradle", GROOVY_BLOCK),
+          ]
+
           found = False
-          for path in candidates:
+          for path, block in candidates:
               p = pathlib.Path(path)
               if not p.exists():
                   continue
               found = True
-              is_kts = path.endswith(".kts")
               text = p.read_text()
-
-              print(f"--- SEBELUM ({path}) ---")
-              for line in text.splitlines():
-                  if "compileSdk" in line or "targetSdk" in line:
-                      print(line)
-
-              def repl_compile(m):
-                  key = m.group(1) or "compileSdk"
-                  return f"{key} = 36" if is_kts else f"{key} 36"
-
-              def repl_target(m):
-                  key = m.group(1) or "targetSdk"
-                  return f"{key} = 34" if is_kts else f"{key} 34"
-
-              text2 = re.sub(
-                  r'(compileSdk(?:Version)?)\s*=?\s*flutter\.compileSdkVersion',
-                  repl_compile, text,
-              )
-              text2 = re.sub(
-                  r'(targetSdk(?:Version)?)\s*=?\s*flutter\.targetSdkVersion',
-                  repl_target, text2,
-              )
-
-              p.write_text(text2)
-
-              print(f"--- SESUDAH ({path}) ---")
-              for line in text2.splitlines():
-                  if "compileSdk" in line or "targetSdk" in line:
-                      print(line)
+              if MARKER in text:
+                  print(f"{path}: override sudah ada, dilewati.")
+                  continue
+              text = text.rstrip() + "\n" + block
+              p.write_text(text)
+              print(f"{path}: override compileSdk (root, subprojects) berhasil ditambahkan.")
+              print("--- Isi file lengkap setelah patch: ---")
+              print(text)
 
           if not found:
-              print("PERINGATAN: tidak ditemukan android/app/build.gradle(.kts) sama sekali!")
+              print("PERINGATAN: tidak ditemukan android/build.gradle(.kts) di root!")
           PYEOF
 
       - name: Ambil dependency
