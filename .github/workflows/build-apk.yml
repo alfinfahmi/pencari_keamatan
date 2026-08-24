@@ -1,4 +1,62 @@
-      - name: Paksa compileSdk seragam di SEMUA modul (app + plugin pihak ketiga)
+name: Build APK
+
+# Jalankan otomatis setiap push ke branch main, ATAU dipicu manual lewat
+# tab "Actions" di GitHub (tombol "Run workflow").
+on:
+push:
+branches: [main]
+workflow_dispatch: {}
+
+jobs:
+build-apk:
+runs-on: ubuntu-latest
+
+steps:
+- name: Checkout kode
+uses: actions/checkout@v4
+
+- name: Setup Java (dibutuhkan Android Gradle build)
+uses: actions/setup-java@v4
+with:
+distribution: "temurin"
+java-version: "17"
+
+- name: Setup Flutter SDK
+uses: subosito/flutter-action@v2
+with:
+channel: "stable"
+cache: true
+
+- name: Setup Python (untuk skrip enkripsi data)
+uses: actions/setup-python@v5
+with:
+python-version: "3.11"
+
+- name: Install pycryptodome
+run: pip install pycryptodome
+
+- name: Generate folder platform Android (jika belum ada)
+# Project ini dikirim tanpa folder android/ karena folder tersebut
+# hanya bisa digenerate oleh Flutter SDK asli. CI ini membuatnya
+# otomatis SEKALI jika belum ada -- setelah itu, commit folder
+# android/ ke repo Anda supaya package name (applicationId) tidak
+# berubah acak setiap build (lihat catatan --org di panduan).
+run: |
+         if [ ! -d "android" ]; then
+           flutter create --platforms=android --org com.lflirboyo .
+         fi
+
+     - name: Paksa compileSdk seragam di SEMUA modul (app + plugin pihak ketiga)
+# Percobaan sebelumnya (subprojects { afterEvaluate {...} }) TERBUKTI
+# TIDAK CUKUP: error "Cannot run Project.afterEvaluate(Action) when
+# the project is already evaluated" -- di sistem build Flutter
+# terbaru, sebagian modul plugin SUDAH selesai dievaluasi Gradle
+# sebelum blok afterEvaluate kita sempat berjalan.
+#
+# Solusi yang benar: pakai 'plugins.withId(...)', yang bereaksi
+# begitu plugin Android diterapkan ke modul manapun -- tidak peduli
+# urutan evaluasi, tidak akan pernah "terlambat" seperti afterEvaluate.
+# Ini pendekatan standar & idiomatik Gradle untuk kasus seperti ini.
         run: |
           python3 << 'PYEOF'
           import pathlib
@@ -84,3 +142,22 @@
               print(f"Berhasil menambahkan subprojects override ke: {path}")
 
           PYEOF
+
+     - name: Ambil dependency
+run: flutter pub get
+
+- name: Generate Hive TypeAdapter (build_runner)
+run: flutter pub run build_runner build --delete-conflicting-outputs
+
+- name: Enkripsi data_koordinat.json -> .enc
+run: python3 encrypt_data.py
+
+- name: Build APK (release)
+run: flutter build apk --release --obfuscate --split-debug-info=build/symbols
+
+- name: Upload APK sebagai artifact
+uses: actions/upload-artifact@v4
+with:
+name: pencari-kecamatan-apk
+path: build/app/outputs/flutter-apk/app-release.apk
+retention-days: 30
