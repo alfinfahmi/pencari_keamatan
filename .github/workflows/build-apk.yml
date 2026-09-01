@@ -1,4 +1,4 @@
-name: Build APK
+name: Build APK & iOS
 
 # Jalankan otomatis setiap push ke branch main, ATAU dipicu manual lewat
 # tab "Actions" di GitHub (tombol "Run workflow").
@@ -8,6 +8,9 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  # ==========================================
+  # JOB 1: BUILD APK ANDROID (Linux Runner)
+  # ==========================================
   build-apk:
     runs-on: ubuntu-latest
 
@@ -16,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Java (dibutuhkan Android Gradle build)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: "temurin"
           java-version: "17"
@@ -35,16 +38,40 @@ jobs:
       - name: Install pycryptodome
         run: pip install pycryptodome
 
-      - name: Generate folder platform Android (jika belum ada)
-        # Project ini dikirim tanpa folder android/ karena folder tersebut
-        # hanya bisa digenerate oleh Flutter SDK asli. CI ini membuatnya
-        # otomatis SEKALI jika belum ada -- setelah itu, commit folder
-        # android/ ke repo Anda supaya package name (applicationId) tidak
-        # berubah acak setiap build (lihat catatan --org di panduan).
+      - name: Generate folder platform Android & iOS (jika belum ada)
+        # PENTING: folder ios/ WAJIB ada juga di sini meski job ini hanya
+        # build APK -- flutter_launcher_icons dikonfigurasi untuk android+ios
+        # sekaligus di pubspec.yaml, dan akan CRASH (bukan sekadar warning)
+        # kalau salah satu folder platform itu tidak ada saat generate ikon.
         run: |
           if [ ! -d "android" ]; then
             flutter create --platforms=android --org com.lflirboyo .
           fi
+          if [ ! -d "ios" ]; then
+            flutter create --platforms=ios --org com.lflirboyo .
+          fi
+
+      - name: Ganti nama aplikasi (label) di AndroidManifest.xml
+        run: |
+          python3 << 'PYEOF'
+          import pathlib, re
+
+          p = pathlib.Path("android/app/src/main/AndroidManifest.xml")
+          if p.exists():
+              text = p.read_text()
+              print("--- SEBELUM ---")
+              for line in text.splitlines():
+                  if "android:label" in line:
+                      print(line)
+              text2 = re.sub(r'android:label="[^"]*"', 'android:label="Koordinat Kec. Tashil"', text, count=1)
+              p.write_text(text2)
+              print("--- SESUDAH ---")
+              for line in text2.splitlines():
+                  if "android:label" in line:
+                      print(line)
+          else:
+              print("PERINGATAN: AndroidManifest.xml tidak ditemukan!")
+          PYEOF
 
       - name: Paksa compileSdk seragam di SEMUA modul (app + plugin pihak ketiga)
         run: |
@@ -52,12 +79,11 @@ jobs:
           import pathlib
           import re
 
-          # 1. Update compileSdk di android/app/build.gradle.kts (atau build.gradle)
           app_files = [
               pathlib.Path("android/app/build.gradle.kts"),
               pathlib.Path("android/app/build.gradle")
           ]
-          
+
           for p in app_files:
               if not p.exists():
                   continue
@@ -67,7 +93,7 @@ jobs:
                   content, c2 = re.subn(r'compileSdkVersion\s+\d+', 'compileSdkVersion 35', content)
               else:
                   c2 = 0
-              
+
               if c1 > 0 or c2 > 0:
                   p.write_text(content)
                   print(f"Berhasil update compileSdk di aplikasi: {p}")
@@ -76,7 +102,6 @@ jobs:
                   p.write_text(content)
                   print(f"Berhasil menyisipkan compileSdk = 35 ke: {p}")
 
-          # 2. Paksa subprojects / plugin pihak ketiga menggunakan plugins.withId di root build.gradle(.kts)
           KTS_BLOCK = '''
           // --- Ditambahkan otomatis oleh CI: paksa compileSdk seragam ke semua modul ---
           subprojects {
@@ -125,8 +150,6 @@ jobs:
                   line_start = text.rfind("\n// ---", 0, idx)
                   if line_start != -1:
                       text = text[:line_start].rstrip() + "\n"
-              
-              # Sisipkan di bagian atas file root build.gradle agar dievaluasi lebih awal
               text = block + "\n\n" + text
               p.write_text(text)
               print(f"Berhasil menambahkan subprojects override ke: {path}")
@@ -135,6 +158,11 @@ jobs:
 
       - name: Ambil dependency
         run: flutter pub get
+
+      - name: Generate ikon aplikasi & splash screen native
+        run: |
+          flutter pub run flutter_launcher_icons
+          flutter pub run flutter_native_splash:create
 
       - name: Generate Hive TypeAdapter (build_runner)
         run: flutter pub run build_runner build --delete-conflicting-outputs
@@ -151,3 +179,169 @@ jobs:
           name: pencari-kecamatan-apk
           path: build/app/outputs/flutter-apk/app-release.apk
           retention-days: 30
+
+  # ==========================================
+  # JOB 2: BUILD IOS (macOS Runner)
+  # ==========================================
+  build-ios:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout kode
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          cache: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pycryptodome
+        run: pip install pycryptodome
+
+      - name: Generate folder platform iOS & Android (jika belum ada)
+        # PENTING: --org HARUS sama dengan job Android (com.lflirboyo), kalau
+        # tidak, bundle identifier iOS & applicationId Android akan berbeda
+        # tanpa sengaja (identitas aplikasi jadi tidak konsisten lintas platform).
+        #
+        # Folder android/ JUGA WAJIB ada di sini meski job ini hanya build
+        # iOS -- flutter_launcher_icons dikonfigurasi android+ios sekaligus
+        # di pubspec.yaml, dan CRASH kalau salah satu folder platform hilang.
+        run: |
+          if [ ! -d "ios" ]; then
+            flutter create --platforms=ios --org com.lflirboyo .
+          fi
+          if [ ! -d "android" ]; then
+            flutter create --platforms=android --org com.lflirboyo .
+          fi
+
+      - name: Tambahkan izin lokasi ke Info.plist (wajib untuk geolocator & flutter_compass)
+        # TANPA key ini, aplikasi iOS akan CRASH (bukan gagal build, tapi
+        # crash saat dipakai pengguna) ketika fitur kompas kiblat atau
+        # "Ambil dari GPS Perangkat" meminta izin lokasi.
+        run: |
+          python3 << 'PYEOF'
+          import pathlib
+
+          p = pathlib.Path("ios/Runner/Info.plist")
+          text = p.read_text()
+
+          KEY_BLOCK = (
+              "\t<key>NSLocationWhenInUseUsageDescription</key>\n"
+              "\t<string>Dipakai untuk kompas kiblat dan menambah titik koordinat dari lokasi Anda</string>\n"
+          )
+
+          if "NSLocationWhenInUseUsageDescription" in text:
+              print("Info.plist: izin lokasi sudah ada, dilewati.")
+          else:
+              text = text.replace("<dict>", "<dict>\n" + KEY_BLOCK, 1)
+              p.write_text(text)
+              print("Info.plist: izin lokasi berhasil ditambahkan.")
+          PYEOF
+
+      - name: Ambil dependency
+        run: flutter pub get
+
+      - name: Generate ikon aplikasi & splash screen native
+        run: |
+          flutter pub run flutter_launcher_icons
+          flutter pub run flutter_native_splash:create
+
+      - name: Generate Hive TypeAdapter (build_runner)
+        run: flutter pub run build_runner build --delete-conflicting-outputs
+
+      - name: Enkripsi data_koordinat.json -> .enc
+        run: python3 encrypt_data.py
+
+      - name: Build iOS (Release, Unsigned)
+        run: flutter build ios --release --no-codesign
+
+      - name: Upload iOS Payload/Runner sebagai artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pencari-kecamatan-ios
+          path: build/ios/iphoneos/Runner.app
+          retention-days: 30
+
+  # ==========================================
+  # JOB 3: BUILD & DEPLOY WEB (GitHub Pages)
+  # ==========================================
+  # Solusi praktis untuk pakai aplikasi ini di iPhone TANPA akun Apple
+  # Developer berbayar: buka versi web-nya di Safari, lalu "Tambah ke
+  # Layar Utama" -- berperilaku seperti aplikasi biasa (ikon sendiri,
+  # tanpa address bar), meski secara teknis tetap web app (PWA).
+  build-web:
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout kode
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          cache: true
+
+      - name: Generate folder platform Web, Android & iOS (jika belum ada)
+        # Folder android/ & ios/ JUGA WAJIB ada meski job ini hanya build web
+        # -- flutter_launcher_icons dikonfigurasi android+ios+web sekaligus
+        # di pubspec.yaml, dan CRASH kalau folder android/ios hilang (web
+        # sendiri kalau hilang cuma dapat warning, tapi android/ios FATAL).
+        run: |
+          if [ ! -d "web" ]; then
+            flutter create --platforms=web --org com.lflirboyo .
+          fi
+          if [ ! -d "android" ]; then
+            flutter create --platforms=android --org com.lflirboyo .
+          fi
+          if [ ! -d "ios" ]; then
+            flutter create --platforms=ios --org com.lflirboyo .
+          fi
+
+      - name: Ambil dependency
+        run: flutter pub get
+
+      - name: Generate ikon aplikasi (termasuk ikon web/PWA)
+        run: flutter pub run flutter_launcher_icons
+
+      - name: Generate Hive TypeAdapter (build_runner)
+        run: flutter pub run build_runner build --delete-conflicting-outputs
+
+      - name: Build Web (release)
+        # --base-href WAJIB cocok dengan path GitHub Pages
+        # (https://<user>.github.io/<nama-repo>/), diambil otomatis dari
+        # nama repo supaya tidak perlu di-hardcode manual.
+        run: |
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          echo "Base href: /$REPO_NAME/"
+          flutter build web --release --base-href "/$REPO_NAME/"
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload hasil build web sebagai Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web
+
+      - name: Deploy ke GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
